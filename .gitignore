@@ -1,0 +1,62 @@
+# --- Market data: NEVER commit tick data (can be huge / licensed) ---
+data/
+*.itch
+*.itch.gz
+*.pcap
+*.parquet
+*.feather
+*.h5
+
+# --- C / C++ / CUDA build artifacts ---
+build/
+cmake-build-*/
+_deps/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.pyd
+*.ptx
+*.cubin
+abi_check
+abi_check.exe
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- ML / RL training artifacts ---
+*.pt
+*.pth
+*.onnx
+checkpoints/
+runs/
+wandb/
+lightning_logs/
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+*.user
+
+# --- OS / OneDrive cruft ---
+Thumbs.db
+Desktop.ini
+.DS_Store
