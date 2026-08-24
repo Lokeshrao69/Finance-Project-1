@@ -159,6 +159,13 @@ lives on a **OneDrive** path (`C:\Users\pekka\OneDrive\Documents\Finance Project
   corrupt build artifacts), or install real Python + CMake + a CUDA toolkit on Windows.
 - **OneDrive caveat:** keep `build/`, `data/`, venvs out of the synced tree (or move the
   repo off OneDrive) — OneDrive sync + build artifacts is a known source of breakage.
+- **Git behavior on this machine (don't get fooled):** an auto-checkpoint commits
+  working-tree changes to `main` as commits titled **"Working Tree Changes"** — so after
+  editing files, `git status` may legitimately read *clean* because they're already
+  committed (not lost). Given the intended feature-branch → PR workflow, you may want to
+  `git reset --soft` those and re-commit deliberately. `core.fsmonitor` was set to
+  `false` (was `true`) during debugging — harmless; revert with
+  `git config core.fsmonitor true` if desired.
 
 ## 9. How to verify current work
 
