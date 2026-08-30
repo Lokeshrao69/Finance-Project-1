@@ -40,7 +40,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # ---- options ---------------------------------------------------------------
-option(NEXUS_BUILD_TESTS  "Build the C++ unit tests (abi_check, lob_test, ring_test)" ON)
+option(NEXUS_BUILD_TESTS  "Build the C++ unit tests (abi_check, lob_test, ring_test, id_map_test)" ON)
 option(NEXUS_BUILD_DEMOS  "Build the shmem ring producer/probe demos"        ON)
 option(NEXUS_BUILD_PYBIND "Build the nexus_engine Pybind11 module"         ON)
 option(NEXUS_ENABLE_CUDA  "Build CUDA risk-engine hooks if a toolkit exists" ON)
@@ -115,6 +115,16 @@ if(NEXUS_BUILD_TESTS)
             target_compile_options(ring_test PRIVATE -Wall -Wextra)
         endif()
         add_test(NAME ring_test COMMAND ring_test)
+    endif()
+
+    # Zero-alloc id -> Order* map: collision / wraparound / backtrack-shift stress.
+    if(EXISTS "${PROJECT_SOURCE_DIR}/cpp_engine/tests/id_map_test.cpp")
+        add_executable(id_map_test cpp_engine/tests/id_map_test.cpp)
+        target_link_libraries(id_map_test PRIVATE nexus::engine)
+        if(NOT MSVC)
+            target_compile_options(id_map_test PRIVATE -Wall -Wextra)
+        endif()
+        add_test(NAME id_map_test COMMAND id_map_test)
     endif()
 endif()
 
