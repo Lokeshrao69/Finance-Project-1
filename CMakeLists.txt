@@ -40,7 +40,8 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # ---- options ---------------------------------------------------------------
-option(NEXUS_BUILD_TESTS  "Build the C++ unit tests (abi_check, lob_test)" ON)
+option(NEXUS_BUILD_TESTS  "Build the C++ unit tests (abi_check, lob_test, ring_test)" ON)
+option(NEXUS_BUILD_DEMOS  "Build the shmem ring producer/probe demos"        ON)
 option(NEXUS_BUILD_PYBIND "Build the nexus_engine Pybind11 module"         ON)
 option(NEXUS_ENABLE_CUDA  "Build CUDA risk-engine hooks if a toolkit exists" ON)
 option(NEXUS_NATIVE_ARCH  "Optimize for the build machine (-march=native)"  ON)
@@ -104,6 +105,27 @@ if(NEXUS_BUILD_TESTS)
         endif()
         add_test(NAME lob_test COMMAND lob_test)
     endif()
+
+    # Shared-memory ring (subsystem 5): order + integrity across a writer thread,
+    # and drop-new-on-full semantics over the real OS shmem segment.
+    if(EXISTS "${PROJECT_SOURCE_DIR}/cpp_engine/tests/ring_test.cpp")
+        add_executable(ring_test cpp_engine/tests/ring_test.cpp)
+        target_link_libraries(ring_test PRIVATE nexus::engine)
+        if(NOT MSVC)
+            target_compile_options(ring_test PRIVATE -Wall -Wextra)
+        endif()
+        add_test(NAME ring_test COMMAND ring_test)
+    endif()
+endif()
+
+# ============================================================================
+#  2b. Subsystem 5 demos — shared-memory book publisher + live probe
+# ============================================================================
+if(NEXUS_BUILD_DEMOS)
+    add_executable(ring_producer cpp_engine/demos/ring_producer.cpp)
+    target_link_libraries(ring_producer PRIVATE nexus::engine)
+    add_executable(ring_probe cpp_engine/demos/ring_probe.cpp)
+    target_link_libraries(ring_probe PRIVATE nexus::engine)
 endif()
 
 # ============================================================================

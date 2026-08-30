@@ -6,9 +6,11 @@ snapshot for anyone (Person A or Person B) picking the project up; the authorita
 constantly-updated handoff doc is `CLAUDE.md`.
 
 > TL;DR: the cross-language state contract is frozen, the C++ matching engine is
-> built and passing its own tests (86/86), and the Python bridge now drives that real
-> engine. **Not yet built/verified:** the compiled `nexus_engine` module (must build in
-> WSL) and everything downstream (ITCH parser, RL env, agent, GPU risk, dashboard).
+> built and passing its own tests (86/86), the Python bridge drives that real engine,
+> and the **shared-memory ring** that will feed the dashboard (subsystem 5's C++ core)
+> is built and demoed live. **Not yet built/verified:** the compiled `nexus_engine`
+> module (must build in WSL) and everything downstream (ITCH parser, RL env, agent,
+> GPU risk, the Python dashboard grain on the ring).
 
 ---
 
@@ -97,6 +99,18 @@ and every reject path (bad qty/price, dup id, pool-full).
 > `nexus_engine` module and the Python tests are NOT built/run yet** — this machine's
 > shell has no real Python / CMake / pybind (see §7). They must be built in **WSL**.
 
+### 3e. Shared-memory ring + flow (subsystem 5, C++) — **built & demoed** ✅
+| Piece | File | Notes |
+|---|---|---|
+| Shared-memory SPSC ring | `cpp_engine/include/nexus/shm_ring.hpp` | OS shmem (POSIX + Windows), lock-free SPSC, drop-new-on-full, 448-B slots |
+| Synthetic flow generator | `cpp_engine/include/nexus/flow_gen.hpp` | seeded LCG, mid random-walk + passive/aggressive mix |
+| Ring tests | `cpp_engine/tests/ring_test.cpp` | **30,011 checks pass** (order + integrity; drop semantics) |
+| Publisher + probe demos | `cpp_engine/demos/ring_producer.cpp`, `ring_probe.cpp` | live cross-process book demo — **verified 200 frames, 0 dropped** |
+
+This is the transport the future dashboard consumes: the engine (real or synthetic flow)
+publishes its `BookStateView` into the ring after every order; a reader process follows
+the live book. Same frozen 448-byte payload end to end.
+
 ---
 
 ## 4. What is NOT done yet
@@ -106,7 +120,8 @@ and every reject path (bad qty/price, dup id, pool-full).
 - ❌ `OrderBookEnv` Gymnasium env + RL agent (PPO/GRPO) + baselines.
 - ❌ Diff-test harness `Engine` vs `StubOrderBook` on identical order streams.
 - ❌ CUDA VaR/CVaR risk engine.
-- ❌ Shared-memory ring → live dashboard.
+- ❌ Python dashboard on top of the shmem ring (the ring's C++ publisher/reader core
+  ✅ is done — see §3e).
 
 ---
 
@@ -159,6 +174,13 @@ parser and `OrderBookEnv` on the frozen contract, then swap `StubOrderBook` for
 # C++ only (works on Windows + MSYS2 g++, no build system needed):
 g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/abi_check.cpp -o abi_check.exe && ./abi_check.exe
 g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/lob_test.cpp -o lob_test.exe && ./lob_test.exe
+g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/ring_test.cpp -o ring_test.exe && ./ring_test.exe
+
+# Live shared-memory demo (subsystem 5) — run the producer in one terminal, the probe in another:
+g++ -std=c++20 -O2 -I cpp_engine/include cpp_engine/demos/ring_producer.cpp -o ring_producer
+g++ -std=c++20 -O2 -I cpp_engine/include cpp_engine/demos/ring_probe.cpp -o ring_probe
+./ring_producer nex_aapl 4000 16384 0xC0FFEE 1     # terminal 1: book -> ring
+./ring_probe nex_aapl 4000 5                          # terminal 2: watch it live
 
 # Full build + Python tests (WSL / Ubuntu + real Python required):
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_BUILD_PYBIND=ON

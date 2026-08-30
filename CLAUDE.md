@@ -50,10 +50,16 @@ Finance Project-1/            # repo root (branch: main)
 │   ├── include/nexus/types.hpp             # [DONE] OrderId/Price/Qty, Fill, Status, ExecResult
 │   ├── include/nexus/order_pool.hpp        # [DONE] zero-alloc intrusive order pool
 │   ├── include/nexus/limit_order_book.hpp  # [DONE] matching engine (Limit/Market/FOK/IOC/Cancel/Modify)
+│   ├── include/nexus/shm_ring.hpp          # [DONE] shared-memory SPSC ring (subsystem 5)
+│   ├── include/nexus/flow_gen.hpp          # [DONE] seeded synthetic order-flow generator
 │   ├── src/                                 # (empty — engine is header-only for now)
+│   ├── demos/
+│   │   ├── ring_producer.cpp               # [DONE] book -> shmem ring publisher
+│   │   └── ring_probe.cpp                  # [DONE] live shmem ring reader
 │   └── tests/
 │       ├── abi_check.cpp                  # [DONE] ABI lock (sizeof == 448)
-│       └── lob_test.cpp                   # [DONE] engine correctness — 86/86 checks ✓
+│       ├── lob_test.cpp                   # [DONE] engine correctness — 86/86 checks ✓
+│       └── ring_test.cpp                  # [DONE] ring order/drop semantics — 30k checks ✓
 ├── python_quant/             # Person B — quant / RL
 │   └── nexus_quant/
 │       ├── __init__.py                    # [DONE] package exports
@@ -115,6 +121,10 @@ training · W7-8 profiling, dashboard, benchmarks, write-up.
 | Zero-alloc order pool | `cpp_engine/include/nexus/order_pool.hpp` | ✅ fixed slab + intrusive free-list |
 | Matching engine | `cpp_engine/include/nexus/limit_order_book.hpp` | ✅ Limit/Market/FOK/IOC/Cancel/Modify |
 | Engine correctness tests | `cpp_engine/tests/lob_test.cpp` | ✅ **86/86 checks pass** |
+| Shared-memory SPSC ring | `cpp_engine/include/nexus/shm_ring.hpp` | ✅ POSIX+Windows shmem, drop-new-on-full, 448-B slots |
+| Synthetic flow generator | `cpp_engine/include/nexus/flow_gen.hpp` | ✅ seeded, deterministic pre-ITCH flow |
+| Ring correctness tests | `cpp_engine/tests/ring_test.cpp` | ✅ **30,011 checks pass** |
+| Ring producer + probe | `cpp_engine/demos/*.cpp` | ✅ live cross-process book demo (verified on Windows) |
 | Python dtype mirror + `StubOrderBook` | `python_quant/nexus_quant/book_state.py` | ✅ complete (diff-test oracle) |
 | Package exports | `python_quant/nexus_quant/__init__.py` | ✅ |
 | Root build | `CMakeLists.txt` | ✅ engine lib + pybind module + CTest + CUDA hooks |
@@ -124,14 +134,18 @@ training · W7-8 profiling, dashboard, benchmarks, write-up.
 | ABI parity test (needs build) | `bindings/tests/test_abi_parity.py` | ⚠️ updated for real engine — build & run in WSL |
 | Standalone C++ ABI check | `cpp_engine/tests/abi_check.cpp` | ✅ **compiles+runs** |
 
-Verified this session with MSYS2 g++:
+Verified this session with MSYS2 g++ (all three green):
 ```
 g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/abi_check.cpp -o abi_check.exe && ./abi_check.exe
 g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/lob_test.cpp -o lob_test.exe && ./lob_test.exe
+g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/ring_test.cpp -o ring_test.exe && ./ring_test.exe
 ```
 → ABI lock prints `contract v1, kDepth=10, sizeof=448 (expected 448), alignof=8`;
-`lob_test` prints `86 checks, 0 failed` / `ALL PASS`. Python tests & the pybind module
-are **not** run here (no interpreter / no CMake — see §8); compile `bindings/` in WSL.
+`lob_test` prints `86 checks, 0 failed` / `ALL PASS`; `ring_test` prints
+`30011 checks, 0 failed` / `ALL PASS` (order+integrity over a writer/reader thread on
+real OS shared memory, plus drop-new-on-full). Python tests & the pybind module are
+**not** run here (no interpreter / no CMake — see §8); compile `bindings/` in WSL.
+Ring demos run here too: `./ring_producer.exe nex 200 ... & ./ring_probe.exe nex 15 5`.
 
 ## 7. Next steps (ordered; low-risk foundations first)
 
@@ -156,8 +170,11 @@ are **not** run here (no interpreter / no CMake — see §8); compile `bindings/
    with adverse-selection + inventory penalties). Also the **diff-test harness**: replay
    an identical order stream through `Engine` and `StubOrderBook` and assert the published
    `BookStateView` matches.
-7. **Later:** CUDA risk engine (subsystem 3), shared-memory ring → dashboard
-   (subsystem 5).
+7. ~~**Subsystem 5 C++ plumbing**~~ — ✅ 2026-08-30: `ShmRing` (SPSC, drop-new-on-full,
+   POSIX+Windows) + `FlowGen` + `ring_producer`/`ring_probe` demos verified live on
+   Windows. The Python dashboard (subsystem 4/5) will consume this ring later.
+8. **Later:** CUDA risk engine (subsystem 3); Python dashboard reading the shmem ring
+   (subsystem 4/5).
 
 ## 8. Environment reality (IMPORTANT — read before running anything)
 
