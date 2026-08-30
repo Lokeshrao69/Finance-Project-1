@@ -121,10 +121,13 @@ training · W7-8 profiling, dashboard, benchmarks, write-up.
 | Zero-alloc order pool | `cpp_engine/include/nexus/order_pool.hpp` | ✅ fixed slab + intrusive free-list |
 | Matching engine | `cpp_engine/include/nexus/limit_order_book.hpp` | ✅ Limit/Market/FOK/IOC/Cancel/Modify |
 | Engine correctness tests | `cpp_engine/tests/lob_test.cpp` | ✅ **86/86 checks pass** |
+| Zero-alloc id→Order map | `cpp_engine/include/nexus/limit_order_book.hpp` (`IdMap`) | ✅ replaced `std::unordered_map` — **hot path is genuinely allocation-free** (bench proves 0 allocs/op) |
+| IdMap stress tests | `cpp_engine/tests/id_map_test.cpp` | ✅ **4,676,294 checks pass** (collision/wraparound/backtrack-shift) |
 | Shared-memory SPSC ring | `cpp_engine/include/nexus/shm_ring.hpp` | ✅ POSIX+Windows shmem, drop-new-on-full, 448-B slots |
 | Synthetic flow generator | `cpp_engine/include/nexus/flow_gen.hpp` | ✅ seeded, deterministic pre-ITCH flow |
 | Ring correctness tests | `cpp_engine/tests/ring_test.cpp` | ✅ **30,011 checks pass** |
 | Ring producer + probe | `cpp_engine/demos/*.cpp` | ✅ live cross-process book demo (verified on Windows) |
+| Benchmark harness | `cpp_engine/bench/bench.cpp` | ✅ throughput + latency + zero-alloc proof — **0 allocs/op on both workloads** (see §7 #8) |
 | Python dtype mirror + `StubOrderBook` | `python_quant/nexus_quant/book_state.py` | ✅ complete (diff-test oracle) |
 | Package exports | `python_quant/nexus_quant/__init__.py` | ✅ |
 | Root build | `CMakeLists.txt` | ✅ engine lib + pybind module + CTest + CUDA hooks |
@@ -134,18 +137,22 @@ training · W7-8 profiling, dashboard, benchmarks, write-up.
 | ABI parity test (needs build) | `bindings/tests/test_abi_parity.py` | ⚠️ updated for real engine — build & run in WSL |
 | Standalone C++ ABI check | `cpp_engine/tests/abi_check.cpp` | ✅ **compiles+runs** |
 
-Verified this session with MSYS2 g++ (all three green):
+Verified this session with MSYS2 g++ (all four green):
 ```
 g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/abi_check.cpp -o abi_check.exe && ./abi_check.exe
 g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/lob_test.cpp -o lob_test.exe && ./lob_test.exe
 g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/ring_test.cpp -o ring_test.exe && ./ring_test.exe
+g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/id_map_test.cpp -o id_map_test.exe && ./id_map_test.exe
 ```
 → ABI lock prints `contract v1, kDepth=10, sizeof=448 (expected 448), alignof=8`;
 `lob_test` prints `86 checks, 0 failed` / `ALL PASS`; `ring_test` prints
 `30011 checks, 0 failed` / `ALL PASS` (order+integrity over a writer/reader thread on
-real OS shared memory, plus drop-new-on-full). Python tests & the pybind module are
-**not** run here (no interpreter / no CMake — see §8); compile `bindings/` in WSL.
-Ring demos run here too: `./ring_producer.exe nex 200 ... & ./ring_probe.exe nex 15 5`.
+real OS shared memory, plus drop-new-on-full); `id_map_test` prints
+`4676294 checks, 0 failed` / `ALL PASS` (collision/wraparound/backtrack-shift).
+Python tests & the pybind module are **not** run here (no interpreter / no CMake —
+see §8); compile `bindings/` in WSL. The benchmark harness proves **0 allocs/op**
+on the hot path; throughput/latency re-measured in WSL (§7 #8). Ring demos run here
+too: `./ring_producer.exe nex 200 ... & ./ring_probe.exe nex 15 5`.
 
 ## 7. Next steps (ordered; low-risk foundations first)
 
@@ -173,7 +180,14 @@ Ring demos run here too: `./ring_producer.exe nex 200 ... & ./ring_probe.exe nex
 7. ~~**Subsystem 5 C++ plumbing**~~ — ✅ 2026-08-30: `ShmRing` (SPSC, drop-new-on-full,
    POSIX+Windows) + `FlowGen` + `ring_producer`/`ring_probe` demos verified live on
    Windows. The Python dashboard (subsystem 4/5) will consume this ring later.
-8. **Later:** CUDA risk engine (subsystem 3); Python dashboard reading the shmem ring
+8. ~~**Zero-alloc hot path (make the idle claim TRUE)**~~ — ✅ 2026-08-30: replaced
+   `id_map_` (`std::unordered_map`, ~1 malloc/resting order) with `nexus::IdMap`, a
+   pre-sized open-addressing linear-probe map with backtrack-shift deletion. The
+   benchmark (`cpp_engine/bench/bench.cpp`) now proves **0 allocs/op** on both
+   workloads; `lob_test` 86/86 and new `id_map_test` 4,676,294 checks pass; ABI lock
+   (448 B) intact. Throughput/latency still to be re-measured on real hardware (the
+   Windows sandbox throttles memory workloads — §8).
+9. **Later:** CUDA risk engine (subsystem 3); Python dashboard reading the shmem ring
    (subsystem 4/5).
 
 ## 8. Environment reality (IMPORTANT — read before running anything)

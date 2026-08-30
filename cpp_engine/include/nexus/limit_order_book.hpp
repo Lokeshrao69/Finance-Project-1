@@ -24,7 +24,6 @@
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
-#include <unordered_map>
 #include <vector>
 
 #include "nexus/order_pool.hpp"  // Order, OrderPool  (pulls in types.hpp + book_state.hpp)
@@ -41,6 +40,96 @@ struct LimitLevel {
     bool empty() const noexcept { return head == nullptr; }
 };
 
+// Zero-allocation id -> Order* open-addressing map (linear probing).
+//
+// This is what gives the engine its "zero-alloc order path": a std::unordered_map
+// mallocs one heap node per insert (and frees it on every cancel/fill), which the
+// benchmark proved breaks the claim (~1 alloc per resting order). This table is
+// sized ONCE in its constructor — never rehashes, never allocates on the hot path.
+// Sized to load <= 0.5 (fast probes); backtrack-shift deletion keeps linear-probe
+// chains contiguous so lookups never stop early at a gap.
+class IdMap {
+public:
+    explicit IdMap(std::size_t capacity) : slots_(next_capacity(capacity)), mask_(slots_.size() - 1) {}
+
+    IdMap(const IdMap&)            = delete;
+    IdMap& operator=(const IdMap&) = delete;
+
+    Order* find(OrderId id) const noexcept {
+        std::size_t i = bucket_(id);
+        while (slots_[i].o != nullptr) {
+            if (slots_[i].id == id) return slots_[i].o;
+            i = (i + 1) & mask_;
+        }
+        return nullptr;
+    }
+
+    // Insert (id, order). Caller guarantees `id` is not already present and that
+    // the table is not full (load factor is bounded at 0.5 by the ctor's sizing).
+    void insert(OrderId id, Order* o) noexcept {
+        std::size_t i = bucket_(id);
+        while (slots_[i].o != nullptr) i = (i + 1) & mask_;
+        slots_[i].id = id;
+        slots_[i].o  = o;
+        ++size_;
+    }
+
+    bool erase(OrderId id) noexcept {
+        std::size_t i = bucket_(id);
+        while (slots_[i].o != nullptr && slots_[i].id != id) i = (i + 1) & mask_;
+        if (slots_[i].o == nullptr) return false;
+
+        slots_[i].o = nullptr;                    // open the hole
+        --size_;
+
+        // Backtrack-shift deletion: move each following key that has the hole on
+        // its probe path up into the hole, so chains stay dense for future probes.
+        std::size_t j = (i + 1) & mask_;
+        while (slots_[j].o != nullptr) {
+            if (on_probe_path_(bucket_(slots_[j].id), i, j)) {
+                slots_[i]   = slots_[j];
+                slots_[j].o = nullptr;
+                i           = j;
+            }
+            j = (j + 1) & mask_;
+        }
+        return true;
+    }
+
+    std::size_t size() const noexcept { return size_; }
+
+private:
+    struct Slot { OrderId id = 0; Order* o = nullptr; };
+
+    // Next power of two >= 2*capacity so the load factor stays <= 0.5. Clamped so
+    // the doubling can never overflow (pool capacities are bounded well below 2^31).
+    static std::size_t next_capacity(std::size_t cap) noexcept {
+        const std::size_t target = cap <= (std::size_t{1} << 31) ? cap * 2 : (std::size_t{1} << 32);
+        std::size_t n = 8;
+        while (n < target) n <<= 1;
+        return n;
+    }
+
+    std::size_t bucket_(OrderId id) const noexcept { return hash(id) & mask_; }
+
+    static std::size_t hash(OrderId id) noexcept {   // splitmix64 finalizer
+        std::uint64_t x = id + UINT64_C(0x9e3779b97f4a7c15);
+        x = (x ^ (x >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+        x = (x ^ (x >> 27)) * UINT64_C(0x94d049bb133111eb);
+        return static_cast<std::size_t>(x ^ (x >> 31));
+    }
+
+    // True if `hole` lies strictly between `home` and `j` on the forward probe
+    // ring — i.e. slot j's chain runs through the hole, so j can be shifted into it.
+    bool on_probe_path_(std::size_t home, std::size_t hole, std::size_t j) const noexcept {
+        return ((hole - home) & mask_) < ((j - home) & mask_);
+    }
+
+    std::vector<Slot> slots_;
+    std::size_t       mask_;
+    std::size_t       size_ = 0;
+};
+
 class LimitOrderBook {
 public:
     // Sentinel for the optional per-call event timestamp: auto-increment instead.
@@ -54,10 +143,10 @@ public:
           min_price_(min_price),
           max_price_(max_price),
           bid_levels_(band_size(min_price, max_price)),
-          ask_levels_(band_size(min_price, max_price)) {
+          ask_levels_(band_size(min_price, max_price)),
+          id_map_(pool_capacity) {
         if (min_price <= 0 || max_price < min_price)
             throw std::invalid_argument("LimitOrderBook: require 0 < min_price <= max_price");
-        id_map_.reserve(pool_capacity * 2);
         std::memset(&state_, 0, sizeof(state_));
         state_.last_trade_side = Side::None;
     }
@@ -100,10 +189,9 @@ public:
     ExecResult modify(OrderId id, Price new_price, Qty new_qty,
                       std::vector<Fill>* fills = nullptr,
                       std::int64_t event_ts = kAutoTs) {
-        auto it = id_map_.find(id);
-        if (it == id_map_.end()) return {id, Status::NoOp, 0, 0};
-        Order* o   = it->second;
-        Side   sd  = o->side;
+        Order* o = id_map_.find(id);
+        if (o == nullptr) return {id, Status::NoOp, 0, 0};
+        Side sd = o->side;
 
         if (new_qty == 0) return cancel(id, event_ts);
 
@@ -161,7 +249,7 @@ private:
         if (side != Side::Bid && side != Side::Ask)
                                             return {id, Status::Rejected_BadPrice, 0, 0};
         if (!is_market && !in_band(price))  return {id, Status::Rejected_BadPrice, 0, 0};
-        if (id_map_.find(id) != id_map_.end())
+        if (id_map_.find(id) != nullptr)
                                             return {id, Status::Rejected_DupId, 0, 0};
 
         // --- fill-or-kill is all-or-nothing: verify BEFORE mutating anything. ---
@@ -266,7 +354,7 @@ private:
         }
         lvl.total_qty += qty;
         lvl.count     += 1;
-        id_map_[id] = o;
+        id_map_.insert(id, o);
 
         if (side == Side::Bid) {               // higher bid index == better bid
             if (best_bid_idx_ < idx) best_bid_idx_ = idx;
@@ -277,9 +365,8 @@ private:
 
     // Remove a live order by id (used by cancel and by modify's reprice path).
     bool unlink_by_id_(OrderId id) {
-        auto it = id_map_.find(id);
-        if (it == id_map_.end()) return false;
-        Order* o = it->second;
+        Order* o = id_map_.find(id);
+        if (o == nullptr) return false;
         LimitLevel& lvl = levels_(o->side)[price_to_idx(o->price)];
 
         if (o->prev) o->prev->next = o->next; else lvl.head = o->next;
@@ -287,7 +374,7 @@ private:
         lvl.total_qty -= o->qty;
         lvl.count     -= 1;
 
-        id_map_.erase(it);
+        id_map_.erase(id);
         pool_.free(o);
 
         if (lvl.empty()) {                     // best price may have moved
@@ -375,7 +462,7 @@ private:
     Price                   max_price_;
     std::vector<LimitLevel> bid_levels_;       // indexed by (price - min_price_)
     std::vector<LimitLevel> ask_levels_;
-    std::unordered_map<OrderId, Order*> id_map_;   // O(1) cancel/modify lookup
+    IdMap                   id_map_;           // zero-alloc id -> Order* (O(1) cancel/modify)
 
     std::ptrdiff_t best_bid_idx_ = -1;         // highest occupied bid index; -1 == none
     std::ptrdiff_t best_ask_idx_ = -1;         // lowest occupied ask index;  -1 == none
