@@ -1,6 +1,6 @@
 // Standalone correctness tests for nexus::LimitOrderBook.
 // No framework / Python / CMake required:
-//   g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include \
+//   g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include
 //       cpp_engine/tests/lob_test.cpp -o lob_test && ./lob_test
 //
 // Covers: resting & L2 ladder ordering, full/partial crosses, price-time FIFO

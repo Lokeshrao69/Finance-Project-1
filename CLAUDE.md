@@ -3,7 +3,7 @@
 > **Purpose of this file:** persistent memory across Claude Code sessions. Read it
 > first every session. When you finish a chunk of work, update **§6 Status** and
 > **§7 Next steps** so the next session resumes without re-deriving everything.
-> Last updated: **2026-08-24**.
+> Last updated: **2026-08-30**.
 
 ---
 
@@ -46,22 +46,27 @@ the ITCH feed).
 ```
 Finance Project-1/            # repo root (branch: main)
 ├── cpp_engine/               # Person A — C++ engine
-│   ├── include/nexus/book_state.hpp   # [DONE] frozen state contract
-│   ├── src/                            # [TODO] matching engine impl (not created yet)
-│   └── tests/abi_check.cpp            # [DONE] standalone ABI check
+│   ├── include/nexus/book_state.hpp        # [DONE] frozen state contract (v1, 448 B)
+│   ├── include/nexus/types.hpp             # [DONE] OrderId/Price/Qty, Fill, Status, ExecResult
+│   ├── include/nexus/order_pool.hpp        # [DONE] zero-alloc intrusive order pool
+│   ├── include/nexus/limit_order_book.hpp  # [DONE] matching engine (Limit/Market/FOK/IOC/Cancel/Modify)
+│   ├── src/                                 # (empty — engine is header-only for now)
+│   └── tests/
+│       ├── abi_check.cpp                  # [DONE] ABI lock (sizeof == 448)
+│       └── lob_test.cpp                   # [DONE] engine correctness — 86/86 checks ✓
 ├── python_quant/             # Person B — quant / RL
 │   └── nexus_quant/
-│       ├── __init__.py                # [DONE] package exports
-│       └── book_state.py              # [DONE] dtype mirror + StubOrderBook
-│   └── tests/test_contract_smoke.py   # [DONE] pure-numpy smoke test
+│       ├── __init__.py                    # [DONE] package exports
+│       └── book_state.py                  # [DONE] dtype mirror + StubOrderBook (oracle)
+│   └── tests/test_contract_smoke.py       # [DONE] pure-numpy smoke test
 ├── bindings/                 # the C++↔Python merge point
-│   ├── pybind_wrapper.cpp             # [DONE, placeholder Engine]
-│   ├── CONTRACT.md                    # [DONE] full state-contract spec
-│   └── tests/test_abi_parity.py       # [DONE] needs compiled module
+│   ├── pybind_wrapper.cpp                 # [DONE] real Engine bridge (order entry + views + fills)
+│   ├── CONTRACT.md                        # [DONE] full state-contract spec
+│   └── tests/test_abi_parity.py           # [DONE] needs compiled module (build in WSL)
 ├── data/                     # tick data — gitignored, never pushed
 ├── .gitignore                # [DONE]
-├── CMakeLists.txt            # [MISSING] root build
-├── pyproject.toml            # [MISSING] python packaging
+├── CMakeLists.txt            # [DONE] root build (engine lib + pybind + CTest + CUDA hooks)
+├── pyproject.toml            # [DONE] scikit-build-core packaging
 └── CLAUDE.md                 # this file
 ```
 
@@ -99,41 +104,60 @@ training · W7-8 profiling, dashboard, benchmarks, write-up.
   valid only until the next mutating engine call); `snapshot()` = owning copy (safe to
   retain, telemetry/tests/cross-thread).
 
-## 6. Status — what's DONE (verified 2026-08-24)
+## 6. Status — what's DONE (verified 2026-08-30)
 
-**Phase 0 — integration seam frozen & stubbed. Nothing substantive built yet.**
+**Phase 1 — C++ matching engine implemented & tested; pybind `Engine` wired to it.**
 
 | Component | File | State |
 |---|---|---|
-| C++ state contract | `cpp_engine/include/nexus/book_state.hpp` | ✅ complete, ABI-locked |
-| Python dtype mirror + `StubOrderBook` | `python_quant/nexus_quant/book_state.py` | ✅ complete |
+| C++ state contract | `cpp_engine/include/nexus/book_state.hpp` | ✅ complete, ABI-locked (v1, 448 B) |
+| Engine value types | `cpp_engine/include/nexus/types.hpp` | ✅ OrderId/Price/Qty, Fill, Status, ExecResult |
+| Zero-alloc order pool | `cpp_engine/include/nexus/order_pool.hpp` | ✅ fixed slab + intrusive free-list |
+| Matching engine | `cpp_engine/include/nexus/limit_order_book.hpp` | ✅ Limit/Market/FOK/IOC/Cancel/Modify |
+| Engine correctness tests | `cpp_engine/tests/lob_test.cpp` | ✅ **86/86 checks pass** |
+| Python dtype mirror + `StubOrderBook` | `python_quant/nexus_quant/book_state.py` | ✅ complete (diff-test oracle) |
 | Package exports | `python_quant/nexus_quant/__init__.py` | ✅ |
-| Pybind bridge (placeholder `Engine`) | `bindings/pybind_wrapper.cpp` | ⚠️ seam only, no matching |
+| Root build | `CMakeLists.txt` | ✅ engine lib + pybind module + CTest + CUDA hooks |
+| Python packaging | `pyproject.toml` | ✅ scikit-build-core |
+| Pybind bridge (REAL engine) | `bindings/pybind_wrapper.cpp` | ✅ order entry + zero-copy views + fills |
 | Python smoke test (no build) | `python_quant/tests/test_contract_smoke.py` | ✅ |
-| ABI parity test (needs build) | `bindings/tests/test_abi_parity.py` | ✅ (skips if unbuilt) |
+| ABI parity test (needs build) | `bindings/tests/test_abi_parity.py` | ⚠️ updated for real engine — build & run in WSL |
 | Standalone C++ ABI check | `cpp_engine/tests/abi_check.cpp` | ✅ **compiles+runs** |
 
 Verified this session with MSYS2 g++:
-`g++ -std=c++20 -O2 -I cpp_engine/include cpp_engine/tests/abi_check.cpp -o abi_check.exe`
-→ prints `contract v1, kDepth=10, sizeof=448 (expected 448), alignof=8`, contiguous
-offsets. Python tests **not** run (no interpreter — see §8).
+```
+g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/abi_check.cpp -o abi_check.exe && ./abi_check.exe
+g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include cpp_engine/tests/lob_test.cpp -o lob_test.exe && ./lob_test.exe
+```
+→ ABI lock prints `contract v1, kDepth=10, sizeof=448 (expected 448), alignof=8`;
+`lob_test` prints `86 checks, 0 failed` / `ALL PASS`. Python tests & the pybind module
+are **not** run here (no interpreter / no CMake — see §8); compile `bindings/` in WSL.
 
 ## 7. Next steps (ordered; low-risk foundations first)
 
 1. ~~**`.gitignore`**~~ — ✅ done 2026-08-24.
 2. ~~**`bindings/CONTRACT.md`**~~ — ✅ done 2026-08-24 (full spec, offsets verified).
-3. **Build system** — root `CMakeLists.txt` (engine lib + pybind module via
-   FetchContent + `abi_check`) and `pyproject.toml`. **Note: cannot build in this
-   Windows/Git-Bash shell — see §8; author the files, build in WSL/Ubuntu.**
-4. **First real subsystem — pick one and branch:**
-   - **A (Person A):** real C++ `LimitOrderBook` (Order/LimitLevel structs, zero-alloc
-     pool, intrusive lists, O(1) ID map, matching) → wire into the pybind `Engine` so
-     it drives `BookStateView`. Diff-test vs `StubOrderBook`.
-   - **B (Person B):** ITCH 5.0 parser (Add/Execute/Cancel) + L2 reconstruction +
-     `OrderBookEnv` Gymnasium env (obs = L2 depth + inventory + PnL + time-left;
-     continuous action = order placement distance from mid; `step()` with
-     adverse-selection + inventory penalties). Can run against `StubOrderBook` with no
-     C++ engine present — **the natural next thing to build.**
+3. ~~**Build system**~~ — ✅ `CMakeLists.txt` + `pyproject.toml` authored 2026-08-30
+   (build/test in WSL — can't build in this shell, §8).
+4. ~~**Person A: real `LimitOrderBook`**~~ — ✅ implemented + 86/86 tests, wired into the
+   pybind `Engine` (order entry, fills, zero-copy views). Diff-test vs `StubOrderBook`
+   pending the WSL build.
+5. **Verify the real seam in WSL** (first check when a Linux env is available):
+   ```bash
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_BUILD_PYBIND=ON
+   cmake --build build -j && ctest --test-dir build --output-on-failure
+   pytest bindings/tests/test_abi_parity.py -v
+   ```
+   → expect `nexus_engine` imports; parity + new order-entry tests green.
+6. **Person B — ITCH 5.0 parser + Gymnasium `OrderBookEnv`** (the natural next build;
+   runs against `StubOrderBook` with no C++ engine, or against the real `Engine` once
+   step 5 lands): ITCH Add/Execute/Cancel → L2 reconstruction; `OrderBookEnv`
+   (obs = L2 depth + inventory + PnL + time-left; action = offset-from-mid; `step()`
+   with adverse-selection + inventory penalties). Also the **diff-test harness**: replay
+   an identical order stream through `Engine` and `StubOrderBook` and assert the published
+   `BookStateView` matches.
+7. **Later:** CUDA risk engine (subsystem 3), shared-memory ring → dashboard
+   (subsystem 5).
 
 ## 8. Environment reality (IMPORTANT — read before running anything)
 

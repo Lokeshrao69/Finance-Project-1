@@ -1,0 +1,39 @@
+# ============================================================================
+#  Nexus-LOB :: Python packaging
+#
+#  The C++/pybind build is single-sourced in CMakeLists.txt; scikit-build-core
+#  (a CMake-based backend) is what makes `pip install .` / `pip install -e .`
+#  work without a second build description to keep in sync.
+#
+#  Intended dev environment: WSL/Ubuntu + real Python (see CLAUDE.md §8). The
+#  simpler dev workflow needs no `pip install` at all:
+#      cmake -S . -B build -DNEXUS_BUILD_PYBIND=ON
+#      cmake --build build -j            # drops nexus_engine into bindings/
+#      pytest bindings/tests/test_abi_parity.py -v
+# ============================================================================
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "nexus-lob"
+# Keep in lock-step with `project(NexusLOB VERSION ...)` in CMakeLists.txt.
+version = "0.1.0"
+description = "Ultra-low-latency limit-order-book matching engine, RL execution agent, and CUDA risk analytics (Nexus-LOB)"
+readme = "CLAUDE.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary — finance-placement portfolio project" }
+
+[tool.scikit-build]
+# Mirror the repo's dev defaults in CMakeLists.txt.
+cmake.build-type = "Release"
+minimum-version = "0.10"
+# Ship the pure-Python package alongside the compiled `nexus_engine` module.
+wheel.packages = ["python_quant/nexus_quant"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+# Let the parity / env tests import BOTH the pure-Python `nexus_quant` package
+# and the compiled `nexus_engine` module dropped into bindings/ by CMake —
+# without requiring a pip install first.
+pythonpath = ["python_quant", "bindings"]

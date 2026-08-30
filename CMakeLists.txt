@@ -139,6 +139,13 @@ if(NEXUS_BUILD_PYBIND)
         LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/bindings"
         RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/bindings")
     message(STATUS "nexus_engine: Pybind11 module -> ${PROJECT_SOURCE_DIR}/bindings")
+
+    # Harvest the compiled module into the wheel / install root as an importable
+    # top-level module (scikit-build-core uses this for `pip install .`). Only
+    # affects packaging — the direct `cmake --build` path above is unchanged.
+    install(TARGETS nexus_engine
+            LIBRARY DESTINATION .
+            RUNTIME DESTINATION .)
 endif()
 
 # ============================================================================

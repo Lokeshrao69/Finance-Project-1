@@ -103,9 +103,10 @@ mutation, a previously-taken `view()` reflects the change while a previously-tak
 - **`version` is a seqlock counter** for the (future) lock-free shared-memory path: the
   writer bumps `version` to odd before mutating and to even after. A reader takes a
   snapshot only when `version` is even and unchanged across the read. Even = stable.
-- The current placeholder `Engine` is single-threaded; the seqlock discipline is
-  specified now so the shared-memory ring (subsystem 5) and the async IPC broadcaster
-  can adopt it without a contract change.
+- The `Engine` bridge is currently single-threaded (the C++ `LimitOrderBook` it wraps
+  is not thread-safe); the seqlock discipline is specified now so the shared-memory
+  ring (subsystem 5) and the async IPC broadcaster can adopt it without a contract
+  change.
 
 ## 6. Versioning & change protocol
 
