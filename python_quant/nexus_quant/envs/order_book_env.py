@@ -1,0 +1,317 @@
+"""Gymnasium optimal-execution environment.
+
+Liquidate a long inventory ``Q`` over a fixed horizon ``T`` against an
+injectable L2 book (``StubBookAdapter`` today, ``EngineAdapter`` later).
+
+Observation
+-----------
+``Box(float32, shape=(44,))`` layout:
+
+=======  =====  ========================================================
+index    name   definition
+=======  =====  ========================================================
+0..9     bidΔ   (mid − bid_px[i]) / OFFSET_SCALE; 1.0 if the level is empty
+10..19   bidSz  bid_sz[i] / SIZE_SCALE
+20..29   askΔ   (ask_px[i] − mid) / OFFSET_SCALE; 1.0 if empty
+30..39   askSz  ask_sz[i] / SIZE_SCALE
+40       inv    remaining inventory / Q
+41       tLeft  remaining steps / T
+42       pnl    mark-to-market ticks / (Q * 10), clipped to [−3, 3]
+43       spread (ask0 − bid0) / OFFSET_SCALE; OFFSET_SCALE if no BBO
+=======  =====  ========================================================
+
+``OFFSET_SCALE = 20`` ticks, ``SIZE_SCALE = 800`` shares. Level *prices*
+stay integer ticks inside the book; only the observation vector is float.
+
+Action
+------
+``Box(low=-1, high=1, shape=(1,))``. Selling a long:
+
+* ``a <= -0.92`` → market sell the child (hit displayed bids).
+* else ``offset = round(a * MAX_OFFSET)`` with ``MAX_OFFSET = 12`` ticks
+  and a sell limit at ``round(mid) + offset``.
+* If that limit is at or through the best bid, treat it as a capped market.
+* Otherwise rest on the ask at ``max(limit, best_bid + 1)``.
+
+Examples: ``-1`` market; ``0`` post at mid; ``0.7`` rest 8 ticks through
+the ask; ``-0.4`` rest 5 ticks below mid (often inside the spread / at bid).
+
+Child size is ``clamp(ceil(inv / t_left), 20, child_max)``. One live child
+per step; the previous residual is cancelled first.
+
+Reward
+------
+Arrival mid (the mid at ``reset``) is the implementation-shortfall benchmark.
+
+Per step, after the child and a burst of exogenous book flow::
+
+    IS_ticks = filled * mid_before − cash_from_child     # sell: >0 if below mid
+    IS_norm  = IS_ticks / (Q * mid_before * 1e-4)
+    inv_pen  = λ_inv * (inv/Q)^2
+    time_pen = λ_t   * (inv/Q) * (t / T)
+    adv      = λ_adv * max(0, mid_before − mid_after) / OFFSET_SCALE
+    reward   = −IS_norm − inv_pen − time_pen − adv
+
+On horizon with leftover inventory the residual is market-dumped and an
+extra ``2.5 * leftover/Q`` is subtracted. Mark-to-market PnL
+(``cash + inv*mid − Q*arrival_mid``) is an observation feature only.
+
+Inventory identity: ``sum(fill sizes) + remaining == Q`` at every
+terminated / truncated step (terminal dump included).
+"""
+from __future__ import annotations
+
+from typing import Any, Optional
+
+import numpy as np
+
+try:
+    import gymnasium as gym
+    from gymnasium import spaces
+except ImportError:  # pragma: no cover — tests install gymnasium
+    gym = None  # type: ignore[assignment]
+    spaces = None  # type: ignore[assignment]
+
+from ..book_port import Resting, StubBookAdapter, adapt
+from ..book_state import DEPTH, Side, StubOrderBook
+from ..replay import spread_ticks
+
+OBS_DIM = 44
+OFFSET_SCALE = 20.0
+SIZE_SCALE = 800.0
+MAX_OFFSET = 12
+DEFAULT_Q = 2_000
+DEFAULT_T = 40
+
+OBS_LABELS: list[str] = (
+    [f"bidΔ{i}" for i in range(DEPTH)]
+    + [f"bidSz{i}" for i in range(DEPTH)]
+    + [f"askΔ{i}" for i in range(DEPTH)]
+    + [f"askSz{i}" for i in range(DEPTH)]
+    + ["inv", "tLeft", "pnl", "spread"]
+)
+
+_Base = gym.Env if gym is not None else object  # type: ignore[misc]
+
+
+class OrderBookEnv(_Base):  # type: ignore[misc]
+    metadata = {"render_modes": []}
+
+    def __init__(
+        self,
+        *,
+        inventory: int = DEFAULT_Q,
+        horizon: int = DEFAULT_T,
+        seed: int = 0x51ED,
+        lambda_inv: float = 0.15,
+        lambda_time: float = 0.35,
+        lambda_adv: float = 0.08,
+        child_max: int = 220,
+        book: Any | None = None,
+    ) -> None:
+        self.inventory0 = int(inventory)
+        self.horizon = int(horizon)
+        self.lambda_inv = float(lambda_inv)
+        self.lambda_time = float(lambda_time)
+        self.lambda_adv = float(lambda_adv)
+        self.child_max = int(child_max)
+        self._seed0 = int(seed)
+        self._rng = np.random.default_rng(self._seed0)
+        self.book = adapt(book if book is not None else StubOrderBook())
+        if gym is not None:
+            self.observation_space = spaces.Box(
+                low=-10.0, high=10.0, shape=(OBS_DIM,), dtype=np.float32
+            )
+            self.action_space = spaces.Box(
+                low=-1.0, high=1.0, shape=(1,), dtype=np.float32
+            )
+        self.t = 0
+        self.inventory = 0
+        self.cash_ticks = 0
+        self.arrival_mid = 0
+        self.agent_rest: Resting | None = None
+        self.fills: list[tuple[int, int, int]] = []  # (t, px, sz)
+
+    def reset(
+        self,
+        *,
+        seed: Optional[int] = None,
+        options: Optional[dict] = None,
+    ) -> tuple[np.ndarray, dict]:
+        del options
+        if seed is not None:
+            self._seed0 = int(seed)
+        self._rng = np.random.default_rng(self._seed0)
+        if hasattr(self.book, "reset"):
+            self.book.reset()
+        else:
+            self.book = adapt(StubOrderBook())
+        self._seed_book()
+        self.t = 0
+        self.inventory = self.inventory0
+        self.cash_ticks = 0
+        self.fills = []
+        self.agent_rest = None
+        self.arrival_mid = self._mid() or 15_000
+        obs = self._observe()
+        return obs, {"arrival_mid": self.arrival_mid}
+
+    def step(self, action: Any) -> tuple[np.ndarray, float, bool, bool, dict]:
+        a = float(np.asarray(action).reshape(-1)[0])
+        a = max(-1.0, min(1.0, a))
+        snap = self.book.snapshot()
+        mid0 = self._mid(snap) or self.arrival_mid
+        self._cancel_agent()
+        want = min(self.inventory, self._child_size())
+        filled = 0
+        notional = 0
+        mode = "limit"
+        action_ticks = 0
+
+        if a <= -0.92 or want <= 0:
+            mode = "market"
+            action_ticks = -MAX_OFFSET
+            if want > 0:
+                r = self.book.take(Side.Ask, want)
+                filled, notional = r.filled, r.notional_ticks
+        else:
+            action_ticks = int(round(a * MAX_OFFSET))
+            px = int(round(mid0)) + action_ticks
+            bid = int(snap["bid_px"][0])
+            if bid and px <= bid:
+                mode = "market"
+                r = self.book.take(Side.Ask, want, limit_px=px)
+                filled, notional = r.filled, r.notional_ticks
+            else:
+                limit = max(px, (bid + 1) if bid else px)
+                self.agent_rest = self.book.rest(Side.Ask, limit, want)
+
+        self._exogenous_flow()
+
+        if self.agent_rest is not None:
+            live = None
+            if hasattr(self.book, "lookup"):
+                live = self.book.lookup(self.agent_rest.order_id)
+            residual = live.size if live is not None else 0
+            got = want - residual
+            if got > 0:
+                px = live.price if live is not None else self.agent_rest.price
+                filled += got
+                notional += got * px
+            if live is None or live.size <= 0:
+                self.agent_rest = None
+
+        if filled > 0:
+            self.inventory -= filled
+            self.cash_ticks += notional
+            self.fills.append((self.t, notional // filled, filled))
+
+        self.t += 1
+        mid1 = self._mid() or mid0
+        inv_frac = self.inventory / self.inventory0
+        t_frac = self.t / self.horizon
+        is_ticks = filled * mid0 - notional if filled else 0
+        is_norm = is_ticks / (self.inventory0 * max(1, mid0) * 1e-4)
+        adv = max(0, mid0 - mid1) / OFFSET_SCALE if filled else 0.0
+        reward = (
+            -is_norm
+            - self.lambda_inv * inv_frac * inv_frac
+            - self.lambda_time * inv_frac * t_frac
+            - self.lambda_adv * adv
+        )
+
+        terminated = self.inventory <= 0
+        truncated = (not terminated) and self.t >= self.horizon
+        if truncated and self.inventory > 0:
+            dump = self.book.take(Side.Ask, self.inventory)
+            self.inventory -= dump.filled
+            self.cash_ticks += dump.notional_ticks
+            if dump.filled:
+                self.fills.append((self.t, dump.avg_px, dump.filled))
+            reward -= 2.5 * (self.inventory / self.inventory0)
+
+        vwap = self.execution_vwap()
+        shortfall_bps = (
+            ((self.arrival_mid - vwap) / self.arrival_mid) * 1e4 if vwap else 0.0
+        )
+        info = {
+            "filled": filled,
+            "inventory": self.inventory,
+            "t_left": max(0, self.horizon - self.t),
+            "mid": mid1,
+            "arrival_mid": self.arrival_mid,
+            "pnl_ticks": self.mark_to_market(mid1),
+            "shortfall_bps": shortfall_bps,
+            "action_ticks": action_ticks,
+            "mode": mode,
+            "vwap": vwap,
+        }
+        return self._observe(), float(reward), bool(terminated), bool(truncated), info
+
+    def execution_vwap(self) -> float:
+        qty = sum(sz for _, _, sz in self.fills)
+        if not qty:
+            return 0.0
+        return sum(px * sz for _, px, sz in self.fills) / qty
+
+    def mark_to_market(self, mid: int | float | None = None) -> float:
+        m = float(mid if mid is not None else (self._mid() or self.arrival_mid))
+        return self.cash_ticks + self.inventory * m - self.inventory0 * self.arrival_mid
+
+    def _observe(self) -> np.ndarray:
+        s = self.book.view()
+        mid = self._mid(s) or self.arrival_mid
+        out = np.zeros(OBS_DIM, dtype=np.float32)
+        for i in range(DEPTH):
+            bp, ap = int(s["bid_px"][i]), int(s["ask_px"][i])
+            out[i] = (mid - bp) / OFFSET_SCALE if bp else 1.0
+            out[10 + i] = float(s["bid_sz"][i]) / SIZE_SCALE
+            out[20 + i] = (ap - mid) / OFFSET_SCALE if ap else 1.0
+            out[30 + i] = float(s["ask_sz"][i]) / SIZE_SCALE
+        out[40] = self.inventory / self.inventory0
+        out[41] = max(0, self.horizon - self.t) / self.horizon
+        pnl = self.mark_to_market(mid)
+        out[42] = float(np.clip(pnl / (self.inventory0 * 10.0), -3.0, 3.0))
+        spr = spread_ticks(s)
+        out[43] = (spr if spr is not None else OFFSET_SCALE) / OFFSET_SCALE
+        return out
+
+    def _mid(self, state=None) -> float | None:
+        s = state if state is not None else self.book.view()
+        bb, ba = int(s["bid_px"][0]), int(s["ask_px"][0])
+        if not bb or not ba:
+            return None
+        return (bb + ba) / 2.0
+
+    def _child_size(self) -> int:
+        left = max(1, self.horizon - self.t)
+        twap = int(np.ceil(self.inventory / left))
+        return max(20, min(self.child_max, twap))
+
+    def _cancel_agent(self) -> None:
+        if self.agent_rest is not None:
+            self.book.cancel_resting(self.agent_rest)
+            self.agent_rest = None
+
+    def _seed_book(self) -> None:
+        mid = 15_000
+        for i in range(12):
+            bsz = int(120 + self._rng.integers(0, 380))
+            asz = int(120 + self._rng.integers(0, 380))
+            self.book.rest(Side.Bid, mid - 1 - i, bsz)
+            self.book.rest(Side.Ask, mid + 1 + i, asz)
+
+    def _exogenous_flow(self) -> None:
+        n = int(3 + self._rng.integers(0, 5))
+        for _ in range(n):
+            s = self.book.view()
+            mid = self._mid(s) or 15_000
+            roll = float(self._rng.random())
+            if roll < 0.28:
+                side = Side.Bid if self._rng.random() < 0.5 else Side.Ask
+                self.book.take(side, int(15 + self._rng.integers(0, 70)))
+            else:
+                side = Side.Bid if self._rng.random() < 0.5 else Side.Ask
+                off = int(1 + self._rng.integers(0, 8))
+                px = int(round(mid)) - off if side == Side.Bid else int(round(mid)) + off
+                self.book.rest(side, px, int(30 + self._rng.integers(0, 160)))
