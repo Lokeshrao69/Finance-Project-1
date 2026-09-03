@@ -1,0 +1,4 @@
+# Person B runtime — python_quant/
+# Keep versions loose; pyproject requires Python >=3.10.
+numpy>=1.24
+gymnasium>=0.29
