@@ -12,15 +12,26 @@ from .book_state import (
     StubOrderBook,
     empty_state,
 )
+from .itch_parser import EventType, ItchParseStats, NormalizedEvent, iter_itch_events
+from .replay import ReplayEngine, check_integrity
+from .envs import OBS_DIM, OrderBookEnv
 
 __all__ = [
     "BOOK_STATE_DTYPE",
     "CONTRACT_VERSION",
     "CT_DTYPE",
     "DEPTH",
+    "OBS_DIM",
     "PX_DTYPE",
     "SZ_DTYPE",
+    "EventType",
+    "ItchParseStats",
+    "NormalizedEvent",
+    "OrderBookEnv",
+    "ReplayEngine",
     "Side",
     "StubOrderBook",
+    "check_integrity",
     "empty_state",
+    "iter_itch_events",
 ]

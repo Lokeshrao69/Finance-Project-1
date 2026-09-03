@@ -11,8 +11,14 @@
 //
 // Standalone, portable C++20:
 //   g++ -std=c++20 -O3 -I cpp_engine/include cpp_engine/bench/bench.cpp -o bench
+<<<<<<< HEAD
 //   ./bench                          # both configs
 //   ./bench crossing 2000000          # explicit: passing-lite or crossing-heavy
+=======
+//   ./bench                          # both configs, default sizes
+//   ./bench --ops 2000000 200000 crossing   # explicit throughput/latency sizes
+//   ./bench passive | crossing       # one config at default sizes
+>>>>>>> bf08948c6ba48e0a76b8f2ac515be5721f33b9ca
 //
 // Methodology notes (read before trusting the numbers):
 //   * A fresh book is seeded with resting liquidity OUTSIDE the timed window.
@@ -245,6 +251,7 @@ RunStats run_ops(const Config& cfg, std::uint64_t ops,
 // ============================================================================
 // Report one config: throughput pass (large) + latency pass (small).
 // ============================================================================
+<<<<<<< HEAD
 void bench(const Config& cfg) {
     constexpr std::uint64_t kThroughputOps = 2'000'000;
     constexpr std::uint64_t kLatencyOps    =   200'000;
@@ -256,6 +263,20 @@ void bench(const Config& cfg) {
 
     std::vector<std::uint32_t> lat;
     const RunStats lt = run_ops(cfg, kLatencyOps, &lat);
+=======
+// Default workload sizes (override on the CLI: `bench <cfg> [tp_ops] [lat_ops]`).
+static constexpr std::uint64_t kDefThroughput = 2'000'000;
+static constexpr std::uint64_t kDefLatency    =   200'000;
+
+void bench(const Config& cfg, std::uint64_t tp_ops, std::uint64_t lat_ops) {
+    std::printf("--- config: %-9s aggressor_ratio=%.2f ---\n", cfg.name, cfg.aggressor_ratio);
+
+    const RunStats tp = run_ops(cfg, tp_ops, /*lat_ns=*/nullptr);
+    const std::uint64_t per_second = (std::uint64_t)(tp.ops / tp.wall_sec);
+
+    std::vector<std::uint32_t> lat;
+    const RunStats lt = run_ops(cfg, lat_ops, &lat);
+>>>>>>> bf08948c6ba48e0a76b8f2ac515be5721f33b9ca
     std::sort(lat.begin(), lat.end());
     const auto q   = [&](double p) { return lat[(std::size_t)(p * (double)lat.size() - 1)]; };
     double mean = 0;
@@ -272,6 +293,13 @@ void bench(const Config& cfg) {
     if (tp.allocs == 0) std::printf("=> ZERO-ALLOC PROVEN\n");
     else                std::printf("<= engine ALLOCATED on the hot path (%.3f/op)\n",
                                     tp.ops ? (double)tp.allocs / (double)tp.ops : 0.0);
+<<<<<<< HEAD
+=======
+    // Latency pass re-runs the same workload at smaller n (per-op rdtsc dominant).
+    std::printf("  latency-pass : %12llu ops, %12llu allocs (%.3f/op)\n",
+                (unsigned long long)lt.ops, (unsigned long long)lt.allocs,
+                lt.ops ? (double)lt.allocs / (double)lt.ops : 0.0);
+>>>>>>> bf08948c6ba48e0a76b8f2ac515be5721f33b9ca
     std::printf("  fills        : %12llu (sum over all order calls)\n\n",
                 (unsigned long long)tp.filled);
 }
@@ -289,6 +317,7 @@ int main(int argc, char** argv) {
         {"crossing", 0.55},   // heavy matching workload (fills + erases)
     };
 
+<<<<<<< HEAD
     if (argc >= 2) {                                // optional single-config selection
         for (const auto& c : configs)
             if (0 == std::strcmp(c.name, argv[1])) { bench(c); return 0; }
@@ -296,5 +325,26 @@ int main(int argc, char** argv) {
         return 2;
     }
     for (const auto& c : configs) bench(c);
+=======
+    // Optional overrides: `bench --ops <tp_ops> <lat_ops> [config]`.
+    // Both ops are 0 => defaults (kDefThroughput / kDefLatency) are used, so a
+    // full-scale run is `bench` and a quick smoke is `bench --ops 100000 30000`.
+    std::uint64_t tp_ops = kDefThroughput, lat_ops = kDefLatency;
+    int argi = 1;
+    if (argc >= 4 && 0 == std::strcmp(argv[1], "--ops")) {
+        tp_ops = std::strtoull(argv[2], nullptr, 10);
+        lat_ops = std::strtoull(argv[3], nullptr, 10);
+        argi = 4;
+    }
+
+    if (argi < argc) {                              // optional single-config selection
+        const char* want = argv[argi];
+        for (const auto& c : configs)
+            if (0 == std::strcmp(c.name, want)) { bench(c, tp_ops, lat_ops); return 0; }
+        std::fprintf(stderr, "unknown config '%s' (try 'passive' or 'crossing')\n", want);
+        return 2;
+    }
+    for (const auto& c : configs) bench(c, tp_ops, lat_ops);
+>>>>>>> bf08948c6ba48e0a76b8f2ac515be5721f33b9ca
     return 0;
 }
