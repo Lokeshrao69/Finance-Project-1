@@ -219,6 +219,35 @@ class EngineAdapter:
         self.engine.cancel(handle.order_id)
         return self._live.pop(handle.order_id, handle).size
 
+    def lookup(self, order_id: int) -> Resting | None:
+        """Live resting handle for ``order_id``, or None if not resting."""
+        return self._live.get(int(order_id))
+
+    def cancel_id(self, order_id: int, size: int | None = None) -> int:
+        """Cancel ``size`` (default: the whole order) of a resting order.
+
+        Mirrors ``StubBookAdapter.cancel_id`` so ``ReplayEngine.apply`` drives the
+        real engine the same way it drives the stub. A full residual uses
+        ``engine.cancel``; a partial reduction uses ``engine.modify`` at the same
+        price, which keeps time priority (matches the stub's partial-cancel
+        semantics). Returns the number of shares actually cancelled.
+        """
+        live = self._live.get(int(order_id))
+        if live is None or live.size <= 0:
+            return 0
+        cut = live.size if size is None else min(live.size, int(size))
+        if cut <= 0:
+            return 0
+        remaining = live.size - cut
+        if remaining <= 0:
+            self.engine.cancel(int(order_id))
+            self._live.pop(int(order_id), None)
+        else:
+            # In-place size reduction keeps the order resting with time priority.
+            self.engine.modify(int(order_id), int(live.price), remaining)
+            live.size = remaining
+        return cut
+
     def record_trade(self, side: Side, price: int, size: int) -> None:
         # Engine records prints on matching; explicit tape prints are a no-op here.
         del side, price, size

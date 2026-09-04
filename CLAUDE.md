@@ -3,7 +3,7 @@
 > **Purpose of this file:** persistent memory across Claude Code sessions. Read it
 > first every session. When you finish a chunk of work, update **§6 Status** and
 > **§7 Next steps** so the next session resumes without re-deriving everything.
-> Last updated: **2026-08-30**.
+> Last updated: **2026-09-04**.
 
 ---
 
@@ -154,6 +154,29 @@ see §8); compile `bindings/` in WSL. The benchmark harness proves **0 allocs/op
 on the hot path; throughput/latency re-measured in WSL (§7 #8). Ring demos run here
 too: `./ring_producer.exe nex 200 ... & ./ring_probe.exe nex 15 5`.
 
+**Phase 1b — Person B: ITCH replay + execution env (merged PR #2, `feature/env-and-itch`, 2026-09-04).**
+Cross-checked this session: the C++ engine tests still pass, and the Python work below is
+present and internally consistent (static review). Python is **not runnable in this shell**
+(no interpreter — §8), so all Python items below are **authored; run them in WSL**.
+
+| Component | File | State |
+|---|---|---|
+| ITCH 5.0 streaming parser | `python_quant/nexus_quant/itch_parser.py` | ✅ authored (Add/MPID/Exec/ExecPx/Cancel/Delete/Replace/Trade, framed+raw, lazy streaming) |
+| ITCH→L2 replay engine | `python_quant/nexus_quant/replay.py` | ✅ authored (`ReplayEngine` + `check_integrity`, injectable book) |
+| Injectable book adapter | `python_quant/nexus_quant/book_port.py` | ✅ authored (`StubBookAdapter` + `EngineAdapter` swap seam) |
+| Gymnasium execution env | `python_quant/nexus_quant/envs/order_book_env.py` | ✅ authored (`OrderBookEnv`, 44-dim obs, IS reward + inv/time/adv penalties) |
+| Execution baselines | `python_quant/nexus_quant/baselines.py` | ✅ authored (TWAP / VWAP / POV / Passive) |
+| Person B tests | `python_quant/tests/test_{itch_parser,order_book_env,replay}.py` | ✅ authored (need WSL to run) |
+| Diff-test harness | `bindings/tests/test_diff_engine_stub.py` | ✅ authored (Engine vs StubOrderBook oracle; skips until `nexus_engine` built) |
+| Python deps | `python_quant/requirements.txt` (numpy, gymnasium) | ✅ |
+
+**Note on the seam:** `ReplayEngine.apply()` needs `book.cancel_id(...)` / `book.lookup(...)`.
+`StubBookAdapter` had both, but `EngineAdapter` did not — a gap that would break replay (and
+the diff-test) against the real engine. Fixed additively in `book_port.py` (full cancel via
+`engine.cancel`, partial via `engine.modify` at the same price to keep time priority). See
+the diff-test for the exact ladder-parity assertion (seq/ts/version + trade counters are
+excluded by design — engine records prints on matching).
+
 ## 7. Next steps (ordered; low-risk foundations first)
 
 1. ~~**`.gitignore`**~~ — ✅ done 2026-08-24.
@@ -170,13 +193,11 @@ too: `./ring_producer.exe nex 200 ... & ./ring_probe.exe nex 15 5`.
    pytest bindings/tests/test_abi_parity.py -v
    ```
    → expect `nexus_engine` imports; parity + new order-entry tests green.
-6. **Person B — ITCH 5.0 parser + Gymnasium `OrderBookEnv`** (the natural next build;
-   runs against `StubOrderBook` with no C++ engine, or against the real `Engine` once
-   step 5 lands): ITCH Add/Execute/Cancel → L2 reconstruction; `OrderBookEnv`
-   (obs = L2 depth + inventory + PnL + time-left; action = offset-from-mid; `step()`
-   with adverse-selection + inventory penalties). Also the **diff-test harness**: replay
-   an identical order stream through `Engine` and `StubOrderBook` and assert the published
-   `BookStateView` matches.
+6. ~~**Person B — ITCH 5.0 parser + Gymnasium `OrderBookEnv`**~~ — ✅ authored + merged
+   PR #2 (2026-09-04): `itch_parser.py`, `replay.py`, `book_port.py`, `envs/order_book_env.py`,
+   `baselines.py`, and their tests (see §6 Phase 1b). The last sub-piece — the **diff-test
+   harness** (`bindings/tests/test_diff_engine_stub.py`, Engine vs `StubOrderBook` oracle) —
+   is now **authored**; it skips until `nexus_engine` is built, so run it in WSL after step 5.
 7. ~~**Subsystem 5 C++ plumbing**~~ — ✅ 2026-08-30: `ShmRing` (SPSC, drop-new-on-full,
    POSIX+Windows) + `FlowGen` + `ring_producer`/`ring_probe` demos verified live on
    Windows. The Python dashboard (subsystem 4/5) will consume this ring later.
@@ -232,6 +253,9 @@ g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include \
 # Python smoke test (needs a real Python + numpy — run in WSL/venv):
 python python_quant/tests/test_contract_smoke.py
 
-# ABI parity (needs the compiled pybind module — build bindings/ first):
-pytest bindings/tests/test_abi_parity.py -v
+# Person B: ITCH parser / replay / env / baselines (needs numpy + gymnasium — WSL):
+pytest python_quant/tests -v
+
+# ABI parity + Engine-vs-Stub diff-test (need the compiled pybind module — build first):
+pytest bindings/tests/test_abi_parity.py bindings/tests/test_diff_engine_stub.py -v
 ```

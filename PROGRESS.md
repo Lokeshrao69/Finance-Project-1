@@ -1,16 +1,21 @@
 # Nexus-LOB — Progress Report
 
-**Status date:** 2026-08-30 · **Branch:** `main` · **Milestone:** Phase 1 — C++ matching
-engine implemented + pybind `Engine` wired to it. This file is a plain-language
+**Status date:** 2026-09-04 · **Branch:** `main` · **Milestone:** Phase 1 — C++ matching
+engine implemented + pybind `Engine` wired to it, **and Phase 1b — Person B's ITCH replay
++ Gymnasium execution env + baselines merged (PR #2)**. This file is a plain-language
 snapshot for anyone (Person A or Person B) picking the project up; the authoritative,
 constantly-updated handoff doc is `CLAUDE.md`.
 
 > TL;DR: the cross-language state contract is frozen, the C++ matching engine is
 > built and passing its own tests (86/86), the Python bridge drives that real engine,
 > and the **shared-memory ring** that will feed the dashboard (subsystem 5's C++ core)
-> is built and demoed live. **Not yet built/verified:** the compiled `nexus_engine`
-> module (must build in WSL) and everything downstream (ITCH parser, RL env, agent,
-> GPU risk, the Python dashboard grain on the ring).
+> is built and demoed live. **Person B has also landed** the ITCH 5.0 parser, an
+> ITCH→L2 replay engine, the injectable stub↔engine adapter, the Gymnasium
+> `OrderBookEnv`, and TWAP/VWAP/POV/Passive baselines — plus a new Engine-vs-Stub
+> diff-test harness. **Not yet built/verified:** the compiled `nexus_engine` module
+> (must build in WSL) and everything downstream (RL agent, GPU risk, the Python
+> dashboard grain on the ring). All Python is **authored, not yet run** (no interpreter
+> in this shell — see §7).
 
 ---
 
@@ -111,14 +116,33 @@ This is the transport the future dashboard consumes: the engine (real or synthet
 publishes its `BookStateView` into the ring after every order; a reader process follows
 the live book. Same frozen 448-byte payload end to end.
 
+### 3f. Person B — ITCH replay + execution env (**authored, not yet run** ⚠️)
+Merged in PR #2 (`feature/env-and-itch`). Runs today against `StubOrderBook` (no C++ build
+needed); swaps to the real engine via `book_port.adapt(...)`.
+
+| Piece | File | Notes |
+|---|---|---|
+| ITCH 5.0 parser | `python_quant/nexus_quant/itch_parser.py` | streaming, framed+raw, Add/MPID/Exec/ExecPx/Cancel/Delete/Replace/Trade |
+| ITCH→L2 replay | `python_quant/nexus_quant/replay.py` | `ReplayEngine` + `check_integrity` (crossed/locked/unsorted/neg-size) |
+| Injectable adapter | `python_quant/nexus_quant/book_port.py` | `StubBookAdapter` + `EngineAdapter`; **`cancel_id`/`lookup` added 2026-09-04** so replay works against the real engine |
+| Gymnasium env | `python_quant/nexus_quant/envs/order_book_env.py` | 44-dim obs, IS reward + inv/time/adv penalities, terminal dump |
+| Baselines | `python_quant/nexus_quant/baselines.py` | TWAP / VWAP / POV / Passive |
+| Tests | `python_quant/tests/test_{itch_parser,order_book_env,replay}.py` | authored |
+| Diff-test harness | `bindings/tests/test_diff_engine_stub.py` | Engine vs `StubOrderBook` L2-ladder parity; skips until module built |
+
+> ⚠️ All of §3f is **authored**; none of it has been executed yet (no Python in this shell).
+> Run it in WSL (§6) — that includes the diff-test, which is the real-engine oracle check.
+
 ---
 
 ## 4. What is NOT done yet
 
 - ❌ Pybind module built + parity tests green (author one shell, build in WSL).
-- ❌ ITCH 5.0 parser + L2 reconstruction.
-- ❌ `OrderBookEnv` Gymnasium env + RL agent (PPO/GRPO) + baselines.
-- ❌ Diff-test harness `Engine` vs `StubOrderBook` on identical order streams.
+- ❌ **Run** the authored Python: ITCH parser, replay, `OrderBookEnv`, baselines, and
+  the diff-test harness all need a real Python (build in WSL, see §6).
+- ❌ Diff-test harness `Engine` vs `StubOrderBook` — **authored**
+  (`bindings/tests/test_diff_engine_stub.py`), needs the compiled module to run.
+- ❌ RL execution agent (PPO/GRPO) vs the baselines (baselines themselves ✅ done).
 - ❌ CUDA VaR/CVaR risk engine.
 - ❌ Python dashboard on top of the shmem ring (the ring's C++ publisher/reader core
   ✅ is done — see §3e).
@@ -208,10 +232,10 @@ See `CLAUDE.md` §8 for the full table and WSL setup guidance.
 
 ## 8. Suggested next steps
 
-1. **Verify the seam in WSL** (§6 full build) — unblock everything downstream.
-2. **Person B:** ITCH 5.0 parser (Add/Execute/Cancel → L2) + `OrderBookEnv`
-   (obs = L2 depth + inventory + PnL + time-left; action = offset from mid; adverse-
-   selection + inventory penalties). Runs against `StubOrderBook` now.
-3. **Both:** diff-test harness — replay one order stream through `Engine` and
-   `StubOrderBook`, assert identical `BookStateView`.
+1. **Verify the seam in WSL** (§6 full build) — unblock everything downstream. This now
+   also runs the authored Person B suite and the new diff-test:
+   `pytest python_quant/tests bindings/tests/test_abi_parity.py bindings/tests/test_diff_engine_stub.py -v`.
+2. ~~**Person B: ITCH parser + `OrderBookEnv` + baselines**~~ — ✅ done (PR #2, merged).
+3. ~~**Diff-test harness**~~ — ✅ authored (`bindings/tests/test_diff_engine_stub.py`),
+   needs the WSL build to run.
 4. Later: PPO/GRPO agent vs baselines · CUDA VaR · dashboard.
