@@ -24,6 +24,7 @@ Makefile
 *.dll
 *.exe
 *.pyd
+*.pdb
 *.ptx
 *.cubin
 abi_check

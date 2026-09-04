@@ -127,21 +127,19 @@ needed); swaps to the real engine via `book_port.adapt(...)`.
 | Injectable adapter | `python_quant/nexus_quant/book_port.py` | `StubBookAdapter` + `EngineAdapter`; **`cancel_id`/`lookup` added 2026-09-04** so replay works against the real engine |
 | Gymnasium env | `python_quant/nexus_quant/envs/order_book_env.py` | 44-dim obs, IS reward + inv/time/adv penalities, terminal dump |
 | Baselines | `python_quant/nexus_quant/baselines.py` | TWAP / VWAP / POV / Passive |
-| Tests | `python_quant/tests/test_{itch_parser,order_book_env,replay}.py` | authored |
-| Diff-test harness | `bindings/tests/test_diff_engine_stub.py` | Engine vs `StubOrderBook` L2-ladder parity; skips until module built |
+| Tests | `python_quant/tests/test_{itch_parser,order_book_env,replay}.py` | ✅ **PASSING** (2026-09-04) |
+| Diff-test harness | `bindings/tests/test_diff_engine_stub.py` | ✅ **PASSING** — Engine-vs-Stub L2-ladder parity |
 
-> ⚠️ All of §3f is **authored**; none of it has been executed yet (no Python in this shell).
-> Run it in WSL (§6) — that includes the diff-test, which is the real-engine oracle check.
+> ✅ **All of §3f is now RUN and PASSING** (2026-09-04, Windows/MSVC). `pytest
+> python_quant/tests bindings/tests -v` → **34 passed**, incl. `test_abi_parity.py` (6) and
+> `test_diff_engine_stub.py` (2) — the real engine and the stub oracle agree.
 
 ---
 
 ## 4. What is NOT done yet
 
-- ❌ Pybind module built + parity tests green (author one shell, build in WSL).
-- ❌ **Run** the authored Python: ITCH parser, replay, `OrderBookEnv`, baselines, and
-  the diff-test harness all need a real Python (build in WSL, see §6).
-- ❌ Diff-test harness `Engine` vs `StubOrderBook` — **authored**
-  (`bindings/tests/test_diff_engine_stub.py`), needs the compiled module to run.
+- ✅ ~~Pybind module built + parity tests green~~ — **DONE 2026-09-04** (Windows/MSVC).
+- ✅ ~~Run the authored Python (parser/replay/env/baselines/diff-test)~~ — **DONE 2026-09-04**.
 - ❌ RL execution agent (PPO/GRPO) vs the baselines (baselines themselves ✅ done).
 - ❌ CUDA VaR/CVaR risk engine.
 - ❌ Python dashboard on top of the shmem ring (the ring's C++ publisher/reader core
@@ -218,24 +216,29 @@ pytest python_quant/tests/test_contract_smoke.py -v
 ## 7. Environment notes (why some things say "not run here")
 
 This session runs on **Windows 11 + Git Bash / MSYS2**, repo on a **OneDrive** path.
-The shell has `g++` (C++20 ✅) but **no real Python, CMake, CUDA, or WSL** (❌). So:
+Updated **2026-09-04**: `g++` (C++20 ✅), **real Python 3.12 installed** (Tier 1 pure-Python
+tests **PASS**), and `cmake` via `pip`. The only remaining gap for the full build is
+**MSVC Build Tools** (install in progress) — needed to compile the pybind `nexus_engine`
+module for Tier 2 (parity + diff-test). CUDA still needs Linux or a Windows CUDA toolkit.
 
 - ✅ C++-only compile/run checks work here (engine tests above).
-- ❌ Building the pybind module / running Python tests must happen in **WSL/Ubuntu**
-  (the intended dev env) or after installing real Python + CMake + CUDA on Windows.
+- ✅ Pure-Python tests work here (`python -m pytest python_quant/tests -v`).
+- ⏳ Tier 2 (compile `nexus_engine`) needs MSVC → then `cmake -S . -B build
+  -DNEXUS_BUILD_PYBIND=ON && cmake --build build -j` + parity + diff-test.
 - ⚠️ Keep `build/`, `data/`, venvs **out of the OneDrive-synced tree** — sync + build
-  artifacts is a known breakage source.
+  artifacts is a known breakage source (copy the repo off OneDrive if the build is slow/flaky).
 
-See `CLAUDE.md` §8 for the full table and WSL setup guidance.
+See `CLAUDE.md` §8 for the full table and the exact Windows build steps.
 
 ---
 
 ## 8. Suggested next steps
 
-1. **Verify the seam in WSL** (§6 full build) — unblock everything downstream. This now
-   also runs the authored Person B suite and the new diff-test:
-   `pytest python_quant/tests bindings/tests/test_abi_parity.py bindings/tests/test_diff_engine_stub.py -v`.
+1. **Finish Tier 2 on Windows** (see §7): finish the MSVC Build Tools install, then
+   `python -m pip install pybind11 cmake` → `cmake -S . -B build -DNEXUS_BUILD_PYBIND=ON`
+   → `cmake --build build -j` → `python -m pytest bindings/tests/test_abi_parity.py
+   bindings/tests/test_diff_engine_stub.py -v`. Tier 1 (pure-Python) already **passed**.
 2. ~~**Person B: ITCH parser + `OrderBookEnv` + baselines**~~ — ✅ done (PR #2, merged).
 3. ~~**Diff-test harness**~~ — ✅ authored (`bindings/tests/test_diff_engine_stub.py`),
-   needs the WSL build to run.
+   needs the Tier 2 build to run.
 4. Later: PPO/GRPO agent vs baselines · CUDA VaR · dashboard.

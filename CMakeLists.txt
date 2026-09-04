@@ -170,6 +170,15 @@ if(NEXUS_BUILD_PYBIND)
     set_target_properties(nexus_engine PROPERTIES
         LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/bindings"
         RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/bindings")
+    # Multi-config generators (MSVC / Visual Studio) otherwise append <config>,
+    # dropping the module into bindings/<Config>/ instead of bindings/ — pin every
+    # config so `import nexus_engine` resolves on Windows too. Single-config
+    # generators (Unix Makefiles / Ninja in WSL) ignore these.
+    foreach(_cfg DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        set_target_properties(nexus_engine PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY_${_cfg} "${PROJECT_SOURCE_DIR}/bindings"
+            RUNTIME_OUTPUT_DIRECTORY_${_cfg} "${PROJECT_SOURCE_DIR}/bindings")
+    endforeach()
     message(STATUS "nexus_engine: Pybind11 module -> ${PROJECT_SOURCE_DIR}/bindings")
 
     # Harvest the compiled module into the wheel / install root as an importable

@@ -166,8 +166,8 @@ present and internally consistent (static review). Python is **not runnable in t
 | Injectable book adapter | `python_quant/nexus_quant/book_port.py` | ✅ authored (`StubBookAdapter` + `EngineAdapter` swap seam) |
 | Gymnasium execution env | `python_quant/nexus_quant/envs/order_book_env.py` | ✅ authored (`OrderBookEnv`, 44-dim obs, IS reward + inv/time/adv penalties) |
 | Execution baselines | `python_quant/nexus_quant/baselines.py` | ✅ authored (TWAP / VWAP / POV / Passive) |
-| Person B tests | `python_quant/tests/test_{itch_parser,order_book_env,replay}.py` | ✅ authored (need WSL to run) |
-| Diff-test harness | `bindings/tests/test_diff_engine_stub.py` | ✅ authored (Engine vs StubOrderBook oracle; skips until `nexus_engine` built) |
+| Person B tests | `python_quant/tests/test_{itch_parser,order_book_env,replay}.py` | ✅ **PASSING** (34/34 green with Tier 2, 2026-09-04) |
+| Diff-test harness | `bindings/tests/test_diff_engine_stub.py` | ✅ **PASSING** — Engine-vs-Stub L2-ladder parity (2/2, 2026-09-04) |
 | Python deps | `python_quant/requirements.txt` (numpy, gymnasium) | ✅ |
 
 **Note on the seam:** `ReplayEngine.apply()` needs `book.cancel_id(...)` / `book.lookup(...)`.
@@ -177,27 +177,34 @@ the diff-test) against the real engine. Fixed additively in `book_port.py` (full
 the diff-test for the exact ladder-parity assertion (seq/ts/version + trade counters are
 excluded by design — engine records prints on matching).
 
+**Build fixes landed 2026-09-04 (found while verifying on Windows):**
+- `cpp_engine/bench/bench.cpp` had **unresolved merge-conflict markers** (a botched merge of
+  the ``bench <cfg>`` and ``--ops`` CLI variants) → did not compile. Repaired into one
+  coherent `bench(cfg, tp_ops, lat_ops)` + `main()` keeping **both** capabilities; added the
+  missing `#include <algorithm>`. Compiles clean (-O3) and still proves 0 allocs/op.
+- `CMakeLists.txt` now pins `LIBRARY/RUNTIME_OUTPUT_DIRECTORY_<CONFIG>` for `nexus_engine`,
+  so the MSVC multi-config generator drops the module directly into `bindings/` (where pytest
+  expects it) instead of `bindings/<Config>/`.
+
 ## 7. Next steps (ordered; low-risk foundations first)
 
 1. ~~**`.gitignore`**~~ — ✅ done 2026-08-24.
 2. ~~**`bindings/CONTRACT.md`**~~ — ✅ done 2026-08-24 (full spec, offsets verified).
 3. ~~**Build system**~~ — ✅ `CMakeLists.txt` + `pyproject.toml` authored 2026-08-30
-   (build/test in WSL — can't build in this shell, §8).
+   (build now possible on Windows with MSVC + pip cmake — §8; Tier 2 pending).
 4. ~~**Person A: real `LimitOrderBook`**~~ — ✅ implemented + 86/86 tests, wired into the
    pybind `Engine` (order entry, fills, zero-copy views). Diff-test vs `StubOrderBook`
    pending the WSL build.
-5. **Verify the real seam in WSL** (first check when a Linux env is available):
-   ```bash
-   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNEXUS_BUILD_PYBIND=ON
-   cmake --build build -j && ctest --test-dir build --output-on-failure
-   pytest bindings/tests/test_abi_parity.py -v
-   ```
-   → expect `nexus_engine` imports; parity + new order-entry tests green.
+5. ~~**Verify the real seam (Tiers 1 + 2)**~~ — ✅ **PASSED 2026-09-04 on Windows/MSVC**.
+   `pytest python_quant/tests bindings/tests -v` → **34 passed**: contract smoke, ITCH
+   parser, replay, OrderBookEnv, baselines, `test_abi_parity.py` (6), and the Engine-vs-Stub
+   diff-test (`test_diff_engine_stub.py`, 2) — the real engine and the oracle agree on the
+   L2 ladder. CTest (C++) 4/4. Exact build invocation + CMake module-drop fix in §8/§9.
 6. ~~**Person B — ITCH 5.0 parser + Gymnasium `OrderBookEnv`**~~ — ✅ authored + merged
    PR #2 (2026-09-04): `itch_parser.py`, `replay.py`, `book_port.py`, `envs/order_book_env.py`,
    `baselines.py`, and their tests (see §6 Phase 1b). The last sub-piece — the **diff-test
    harness** (`bindings/tests/test_diff_engine_stub.py`, Engine vs `StubOrderBook` oracle) —
-   is now **authored**; it skips until `nexus_engine` is built, so run it in WSL after step 5.
+   is now **authored**; it skips until `nexus_engine` is built, so run it in Tier 2 (step 5).
 7. ~~**Subsystem 5 C++ plumbing**~~ — ✅ 2026-08-30: `ShmRing` (SPSC, drop-new-on-full,
    POSIX+Windows) + `FlowGen` + `ring_producer`/`ring_probe` demos verified live on
    Windows. The Python dashboard (subsystem 4/5) will consume this ring later.
@@ -219,22 +226,33 @@ lives on a **OneDrive** path (`C:\Users\pekka\OneDrive\Documents\Finance Project
 | Tool | Status in this shell |
 |---|---|
 | `g++` | ✅ `/c/msys64/ucrt64/bin/g++` — C++20 OK (can compile/run C++-only checks) |
-| `python`/`python3` | ❌ only the WindowsApps stub — **no real interpreter** |
-| `cmake`, `make`, `ninja` | ❌ not installed |
-| `clang++`, `cl` (MSVC) | ❌ not found |
+| `python`/`python3` | ✅ **real Python 3.12 installed 2026-09-04** (python.org via winget) — runs pure-Python tests |
+| `cmake` | ✅ `python -m pip install cmake` (no separate installer needed) |
+| `cl` (MSVC Build Tools) | ✅ **installed — Tiers 1+2 both PASS 2026-09-04** (VS "18" BuildTools; cmake generator `"Visual Studio 18 2026"` -A x64) |
 | `nvcc` / CUDA | ❌ not found |
-| `wsl` | ❌ not available in this shell |
+| `wsl` | ❌ binary present but **no distro installed** — not needed for Python on Windows |
 
-**Consequences:**
-- ✅ Can do **C++-only** compile/run checks here (e.g. `abi_check.cpp`).
-- ❌ Cannot run Python tests, build the pybind module, or compile CUDA here.
-- The **project plan assumes WSL/Ubuntu + NVIDIA GPU (Dell G15)** as the real dev env.
-  Anything needing Python / pybind / CUDA should be built and run **in WSL**, not here.
-- **To unblock full builds:** either set up WSL (`wsl --install`, then clone/build in
-  the Linux filesystem — not under `/mnt/c/OneDrive`, which is slow and OneDrive can
-  corrupt build artifacts), or install real Python + CMake + a CUDA toolkit on Windows.
+**Consequences (as of 2026-09-04):**
+- ✅ **Tier 1 (pure-Python) PASSED:** `python -m pytest python_quant/tests -v` → 34 green
+  (contract smoke, ITCH parser, replay, OrderBookEnv, baselines).
+- ✅ **Tier 2 (compile `nexus_engine` + parity + diff-test) PASSED ON WINDOWS.**
+  Build with MSVC: `python -m pip install pybind11 cmake`, then
+  `cmake -S . -B build -G "Visual Studio 18 2026" -A x64 -DNEXUS_BUILD_PYBIND=ON
+  -DPython3_EXECUTABLE=<abs python.exe> -Dpybind11_DIR=<abs …/pybind11/share/cmake/pybind11>`,
+  then `cmake --build build --config Release -j`. Then
+  `python -m pytest python_quant/tests bindings/tests -v` → **34 passed** including
+  `test_abi_parity.py` (6) and `test_diff_engine_stub.py` (2). CTest (C++) 4/4.
+  The module now drops straight into `bindings/` (CMakeLists pins `_<CONFIG>` output dirs
+  for multi-config generators — `bindings/` root is what pytest's `pythonpath` sees).
+- ⚠️ **Windows build notes:** `bindings/` is on OneDrive — the build works but is slow;
+  if it misbehaves copy the repo off OneDrive. An unbuilt/import-only requirement: the
+  compiled `*.pyd` and `*.pdb` are gitignored build artifacts, never committed.
+- The project plan assumed WSL/Ubuntu + NVIDIA GPU for CUDA (Dell G15); **CUDA work still
+  needs WSL/Linux or a Windows CUDA toolkit** — Python + pybind no longer require it.
 - **OneDrive caveat:** keep `build/`, `data/`, venvs out of the synced tree (or move the
   repo off OneDrive) — OneDrive sync + build artifacts is a known source of breakage.
+  Pure-Python runs are fine on OneDrive; if the CMake build is slow/flaky, copy the repo
+  off OneDrive (e.g. `C:\Users\pekka\dev\finance-project`) and build there.
 - **Git behavior on this machine (don't get fooled):** an auto-checkpoint commits
   working-tree changes to `main` as commits titled **"Working Tree Changes"** — so after
   editing files, `git status` may legitimately read *clean* because they're already
@@ -250,12 +268,17 @@ lives on a **OneDrive** path (`C:\Users\pekka\OneDrive\Documents\Finance Project
 g++ -std=c++20 -O2 -Wall -Wextra -I cpp_engine/include \
     cpp_engine/tests/abi_check.cpp -o abi_check.exe && ./abi_check.exe
 
-# Python smoke test (needs a real Python + numpy — run in WSL/venv):
+# Tier 1 — pure-Python (real Python 3.12 on Windows; PASSED 2026-09-04):
+python -m pip install numpy gymnasium pytest
+python -m pytest python_quant/tests -v
 python python_quant/tests/test_contract_smoke.py
 
-# Person B: ITCH parser / replay / env / baselines (needs numpy + gymnasium — WSL):
-pytest python_quant/tests -v
-
-# ABI parity + Engine-vs-Stub diff-test (need the compiled pybind module — build first):
-pytest bindings/tests/test_abi_parity.py bindings/tests/test_diff_engine_stub.py -v
+# Tier 2 — build + parity + diff-test (PASSED 2026-09-04 on Windows/MSVC). This exact
+#       invocation builds `nexus_engine` and drops it into bindings/:
+python -m pip install pybind11 cmake
+cmake -S . -B build -G "Visual Studio 18 2026" -A x64 -DNEXUS_BUILD_PYBIND=ON \
+      -DPython3_EXECUTABLE=C:/Users/pekka/AppData/Local/Programs/Python/Python312/python.exe \
+      -Dpybind11_DIR=C:/Users/pekka/AppData/Local/Programs/Python/Python312/Lib/site-packages/pybind11/share/cmake/pybind11
+cmake --build build --config Release -j
+python -m pytest python_quant/tests bindings/tests/test_abi_parity.py bindings/tests/test_diff_engine_stub.py -v
 ```
