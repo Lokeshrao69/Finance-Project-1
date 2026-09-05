@@ -186,6 +186,30 @@ excluded by design — engine records prints on matching).
   so the MSVC multi-config generator drops the module directly into `bindings/` (where pytest
   expects it) instead of `bindings/<Config>/`.
 
+**Phase 1c — Person B: PPO execution agent (2026-09-05).**
+
+| Component | File | State |
+|---|---|---|
+| Pure-NumPy MLP + Adam | `python_quant/nexus_quant/agents/mlp.py` | ✅ (backward finite-diff-tested) |
+| PPO learner (`PPOPolicy` / `train_ppo` / GAE) | `python_quant/nexus_quant/agents/ppo.py` | ✅ deterministic, seeded |
+| Policy save/load (`.npz`, no torch) | `python_quant/nexus_quant/agents/ppo.py` | ✅ |
+| Eval harness vs baselines | `python_quant/nexus_quant/agents/evaluate.py` | ✅ (`strategy_table`, `format_table`) |
+| One-shot train+eval CLI | `python_quant/scripts/train_eval_agent.py` | ✅ |
+| Agent tests | `python_quant/tests/test_ppo_agent.py` | ✅ **12/12** (grad, GAE, determinism, save/load) |
+| Env price knobs | `order_book_env.py` (`is_coef`, `lambda_sched`, default-off) | ✅ additive; default behavior unchanged |
+| Agent README (measured numbers, honest) | `python_quant/nexus_quant/agents/README.md` | ✅ |
+
+**Measured (default env, 100 seeded episodes, 2026-09-05):** the PPO agent
+beats **all** baselines on the env's reward (−5.26 vs VWAP −7.59, TWAP −10.32,
+POV −11.19, Passive −13.12) by learning to time fills around adverse mid-moves
+while holding a near-TWAP pace. On the pure **shortfall_bps** slippage metric
+it lands ≈VWAP (1.60 vs 1.55, within noise); TWAP (1.375) is the price
+benchmark. An honest sweep of `is_coef`/λ reductions/schedule-tracking/warm-start
+did not beat TWAP on this *gentle-walk* sim — the env's bid-cap fill mechanics
++ fixed TWAP-pace child size cap achievable price; the path to the ~14%-below-VWAP
+headline is a **high-vol/gap-off flow regime** (and/or a schedule-constrained
+post-at-touch objective). Knobs and harness are in place to run that.
+
 ## 7. Next steps (ordered; low-risk foundations first)
 
 1. ~~**`.gitignore`**~~ — ✅ done 2026-08-24.

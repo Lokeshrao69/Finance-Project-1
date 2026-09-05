@@ -50,7 +50,18 @@ Per step, after the child and a burst of exogenous book flow::
     inv_pen  = λ_inv * (inv/Q)^2
     time_pen = λ_t   * (inv/Q) * (t / T)
     adv      = λ_adv * max(0, mid_before − mid_after) / OFFSET_SCALE
-    reward   = −IS_norm − inv_pen − time_pen − adv
+    reward   = −is_coef · IS_norm − inv_pen − time_pen − adv
+
+``is_coef`` (default 1.0) scales the price-quality (IS) term independent of
+the inventory-pacing penalties. Raising it (e.g. 4) trains an agent that
+prioritises fill price over fill certainty — the variant measured on the
+shortfall_bps / vs-VWAP headline.
+
+``lambda_sched`` (default 0.0) adds a TWAP-schedule-tracking term
+``λ_sched · ((inv/Q) − (T−t)/T)²``. Non-zero, it holds the agent to the
+time-weighted liquidation path and leaves only fill-price to optimise —
+the clean way to chase the “lower slippage than VWAP” headline rather than
+reward-hacking completion risk.
 
 On horizon with leftover inventory the residual is market-dumped and an
 extra ``2.5 * leftover/Q`` is subtracted. Mark-to-market PnL
@@ -106,6 +117,8 @@ class OrderBookEnv(_Base):  # type: ignore[misc]
         lambda_inv: float = 0.15,
         lambda_time: float = 0.35,
         lambda_adv: float = 0.08,
+        is_coef: float = 1.0,
+        lambda_sched: float = 0.0,
         child_max: int = 220,
         book: Any | None = None,
     ) -> None:
@@ -114,6 +127,8 @@ class OrderBookEnv(_Base):  # type: ignore[misc]
         self.lambda_inv = float(lambda_inv)
         self.lambda_time = float(lambda_time)
         self.lambda_adv = float(lambda_adv)
+        self.is_coef = float(is_coef)
+        self.lambda_sched = float(lambda_sched)
         self.child_max = int(child_max)
         self._seed0 = int(seed)
         self._rng = np.random.default_rng(self._seed0)
@@ -213,11 +228,14 @@ class OrderBookEnv(_Base):  # type: ignore[misc]
         is_ticks = filled * mid0 - notional if filled else 0
         is_norm = is_ticks / (self.inventory0 * max(1, mid0) * 1e-4)
         adv = max(0, mid0 - mid1) / OFFSET_SCALE if filled else 0.0
+        sched_frac = max(0.0, self.horizon - self.t) / self.horizon
+        sched_dev = (inv_frac - sched_frac) * (inv_frac - sched_frac)
         reward = (
-            -is_norm
+            -self.is_coef * is_norm
             - self.lambda_inv * inv_frac * inv_frac
             - self.lambda_time * inv_frac * t_frac
             - self.lambda_adv * adv
+            - self.lambda_sched * sched_dev
         )
 
         terminated = self.inventory <= 0

@@ -16,6 +16,18 @@ from .itch_parser import EventType, ItchParseStats, NormalizedEvent, iter_itch_e
 from .replay import ReplayEngine, check_integrity
 from .envs import OBS_DIM, OrderBookEnv
 
+# PPO execution agent is exposed via nexus_quant.agents — pulled in lazily by
+# the top-level convenience re-exports below (kept additive, no import order
+# coupling with .envs).
+from .agents import (
+    PPOConfig,
+    PPOPolicy,
+    evaluate_policy,
+    format_table,
+    strategy_table,
+    train_ppo,
+)
+
 __all__ = [
     "BOOK_STATE_DTYPE",
     "CONTRACT_VERSION",
@@ -28,10 +40,16 @@ __all__ = [
     "ItchParseStats",
     "NormalizedEvent",
     "OrderBookEnv",
+    "PPOConfig",
+    "PPOPolicy",
     "ReplayEngine",
     "Side",
     "StubOrderBook",
     "check_integrity",
     "empty_state",
+    "evaluate_policy",
+    "format_table",
     "iter_itch_events",
+    "strategy_table",
+    "train_ppo",
 ]
