@@ -101,3 +101,162 @@ A pure-Python reference/stub order book
 Cross-language parity testing
 
 The architecture is deliberately designed so that the Python research stack can be developed against a deterministic StubOrderBook, then switched to the real C++ engine without changing the surrounding execution logic.
+Why Nexus-LOB?
+
+Most introductory algorithmic-trading projects model a market using something similar to:
+
+price → quantity
+
+and then simulate execution by manually modifying arrays.
+
+That is useful for demonstrating concepts, but it misses several properties that become important when studying real execution:
+
+price-time priority
+order identity
+partial execution
+cancellation
+modification semantics
+market-order sweeps
+liquidity depletion
+queue position
+crossed-book prevention
+deterministic replay
+latency-sensitive data structures
+
+Nexus-LOB treats the limit order book itself as a first-class systems component.
+
+This creates a research stack where:
+
+Market Data
+     │
+     ▼
+ITCH Parser
+     │
+     ▼
+L2 Replay Engine
+     │
+     ▼
+Order Book State
+     │
+     ├───────────────┐
+     ▼               ▼
+C++ Matching     Python Stub
+Engine            Reference
+     │               │
+     └───────┬───────┘
+             ▼
+      Execution Environment
+             │
+       ┌─────┴─────┐
+       ▼           ▼
+   Baselines       RL
+       │           │
+       └─────┬─────┘
+             ▼
+    Execution Analytics
+
+The resulting system is intended to bridge the gap between:
+
+market microstructure research
+
+and
+
+performance-oriented trading systems engineering.
+
+Core Objectives
+
+Nexus-LOB is being developed around five major subsystems.
+
+Subsystem	Purpose	Status
+C++ Matching Engine	Deterministic low-latency order matching	Implemented
+Python Quant Layer	Market simulation and execution research	Implemented
+RL Execution Agent	Learn optimal execution policies	Planned
+CUDA Risk Engine	Monte-Carlo VaR/CVaR acceleration	Planned
+Zero-Copy Dashboard	Live order-book / execution telemetry	Partially implemented
+
+The intended final architecture is:
+
+                   ┌───────────────────────────────┐
+                   │       Market Data / ITCH       │
+                   └──────────────┬────────────────┘
+                                  │
+                                  ▼
+                   ┌───────────────────────────────┐
+                   │      Replay / L2 Builder       │
+                   └──────────────┬────────────────┘
+                                  │
+                                  ▼
+        ┌─────────────────────────────────────────────────┐
+        │              Nexus Matching Layer                │
+        │                                                  │
+        │   C++ LimitOrderBook     Python StubOrderBook    │
+        │          │                         │              │
+        │          └───────── Same Contract ─┘              │
+        └───────────────────────┬─────────────────────────┘
+                                │
+                                ▼
+                    ┌────────────────────────┐
+                    │ Execution Environment  │
+                    │      Gymnasium         │
+                    └───────────┬────────────┘
+                                │
+                 ┌──────────────┼──────────────┐
+                 ▼              ▼              ▼
+              TWAP            VWAP            POV
+                 │              │              │
+                 └──────────────┼──────────────┘
+                                │
+                                ▼
+                         RL Execution Agent
+                         PPO / GRPO / etc.
+                                │
+                                ▼
+                   Execution Analytics / Risk
+Architecture
+High-Level Architecture
+┌───────────────────────────────────────────────────────────┐
+│                     Nexus-LOB Platform                    │
+├───────────────────────────────────────────────────────────┤
+│                                                           │
+│  Market Data                                             │
+│  ┌──────────────┐      ┌───────────────┐                │
+│  │ ITCH 5.0     │─────▶│ Replay Engine │                │
+│  │ Parser       │      │ / L2 Builder  │                │
+│  └──────────────┘      └───────┬───────┘                │
+│                                │                         │
+│                                ▼                         │
+│                    ┌─────────────────────┐              │
+│                    │ Frozen Book Contract │              │
+│                    └──────────┬──────────┘              │
+│                               │                         │
+│                 ┌─────────────┴─────────────┐           │
+│                 ▼                           ▼           │
+│        ┌────────────────┐         ┌────────────────┐    │
+│        │ C++ Engine     │         │ Python Stub    │    │
+│        │                │         │                │    │
+│        │ LimitOrderBook │         │ StubOrderBook  │    │
+│        └───────┬────────┘         └───────┬────────┘    │
+│                │                          │             │
+│                └───────────┬──────────────┘             │
+│                            ▼                            │
+│                 ┌──────────────────────┐                │
+│                 │ Book Adapter Layer   │                │
+│                 └──────────┬───────────┘                │
+│                            ▼                            │
+│                 ┌──────────────────────┐                │
+│                 │ Gymnasium Execution  │                │
+│                 │ Environment          │                │
+│                 └──────────┬───────────┘                │
+│                            │                            │
+│                 ┌──────────┼───────────┐                │
+│                 ▼          ▼           ▼                │
+│               TWAP       VWAP         POV               │
+│                 │          │           │                │
+│                 └──────────┼───────────┘                │
+│                            ▼                            │
+│                     RL Execution                        │
+│                            │                            │
+│                            ▼                            │
+│                    Risk / Analytics                      │
+│                                                           │
+└───────────────────────────────────────────────────────────┘
